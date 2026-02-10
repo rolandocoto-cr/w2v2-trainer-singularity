@@ -1,0 +1,119 @@
+#!/bin/bash
+
+#SBATCH -J t07
+#SBATCH -o baima-ipa-noAugmentation-191mins-07-output.txt
+#SBATCH -e baima-ipa-noAugmentation-191mins-07-errorlog.txt
+#SBATCH -p gpuq
+#SBATCH --gres=gpu:nvidia_a100_80gb_pcie_3g.40gb:1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=4
+#SBATCH --time=18:00:00
+
+
+#============================================================================
+# User Inputs
+#============================================================================
+
+# Output file of the script. This needs to be the same as what you put in
+# the line "SBATCH -o" above.
+outputSlurm="baima-ipa-noAugmentation-191mins-07-output.txt"
+
+# Name of the Singularity Container
+singularityContainer="asr-w2v2-lm-python310.sif"
+
+# HPC Root. This is the topmost directory in your supercomputer where your code and
+# all the other files live. This needs to be "mounted" onto the Singularity virtual
+# drive so that the files can be read properly.
+hpcRoot="/dartfs-hpc/rc/home/z/f004dvz"
+
+# HPC Storage Root. In some HPC systems, you might get a larger, separate directory
+# to store additional data. This would need to be shared as well. If you don't have
+# this, then this can be the same as the hpcRoot.
+hpcStorage="/dartfs/rc/lab/W/WrayS"
+
+# This is where the Python code and the Singularity package should be
+singularityAndCodeFolder="/dartfs-hpc/rc/home/z/f004dvz/functioning-trainer-asr-w2v2"
+
+# These files should be in folderCSV
+csvfolder="/dartfs/rc/lab/W/WrayS/asr-baima-2024/input-csv"
+csvTrain="baima-ipa-noAugmentation-191mins-07-train.csv"
+csvValid="baima-ipa-noAugmentation-191mins-07-valid.csv"
+csvTest="baima-ipa-noAugmentation-191mins-07-test.csv"
+lmModel="baima-ipa-noAugmentation-191mins-07-lm-4-correct.arpa"
+
+# Folder where the audio files are located
+wavFolder="/dartfs/rc/lab/W/WrayS/asr-baima-2024/wav"
+
+# Folder where the computer should write the logs
+logFolder="/dartfs/rc/lab/W/WrayS/asr-baima-2024/logs"
+
+# Folder where the trained checkpoints should be stored.
+# The system will create this folder, and, if you wish,
+# erase this folder at the end so you don't run out of space.
+modelFolder="/dartfs/rc/lab/W/WrayS/asr-baima-2024/models/baima-ipa-noAugmentation-191mins-07"
+
+# Run id. This number is there in case you need to train more than one dataset.
+# For example, if you make 20 partitions of the data, this can be partition, 1, 2, 3, etc.
+runID="07"
+
+# Condition. This variable is reserved in case you are running more than one
+# experimental condition. For example, "ipa", "pinyin", "simple", etc.
+conditionID="ipa"
+
+# Desired epochs. The formula for the epochs is approximately:
+desiredTrainEpochs="27"
+
+# save_total_limit: Maximum number of checkpoints that should be saved. This needs to be controlled
+# because you might run out of hard disk. Each checkpoint is about 3.5GB. If you save many, you'll
+# have a better idea of the training progression, but you'll use more space.
+saveTotalLimit="20"
+
+# per_device_train_batch_size: Batch size. This depends on your GPU. The default is 8, but if you
+# get messages that you're running out of memory, you can reduce this number.
+perDeviceTrainBatchSize="8"
+
+# outputPrefix. This is for the filenames of the output logs. This should have the following
+# pieces of information, separated by dashes:
+#    languageName-condition-anyAugmentations-minutes-runID
+# For example, if it was:
+#    chuj-noCond-noAug-300mins-01
+# This would mean that the output is for the Chuj language, without any special training
+# conditions (noCond), without any special augmentations to the data (noAug), with a total
+# of 300 minutes in the dataset, and with the id "01".
+# The example below, which is:
+#    baima-ipa-noAugmentation-191mins-07
+# Means that this is for the Baima language, in the "ipa" condition, without any augmentation,
+# with a total of 191 minutes, and its seventh random reshuffling of the data.
+# These are going to be used in the "link-error-and-stats-lm.py" file, to organize all of the
+# training data into a single TSV. This will later be imported into your statistical software.
+outputPrefix="baima-ipa-noAugmentation-191mins-07"
+
+
+#============================================================================
+# Code
+# (1) Make the folder that will contain the models
+# (2) Run the trainer using the Singularity container. This will train 
+#     models and measure their accuracy on the test sets.
+# (3) Get the disk space used by the models
+# (4) Erase the folder that contains the model. (This is necessary if
+#     you are performing an experiment with multiple trainers running
+#     at the same time, and you don't want to completely fill the disk).
+# (5) Get the validation CER and WER stats and link them with the CER
+#     and the WER of the test set. This will help find any potential
+#     overfitting.
+#============================================================================
+
+date
+
+mkdir ${modelFolder}
+
+apptainer exec --nv --mount type=bind,src=${hpcRoot},dst=${hpcRoot} --mount type=bind,src=${hpcStorage},dst=${hpcStorage} ${singularityAndCodeFolder}/${singularityContainer} python3 ${singularityAndCodeFolder}/train-wav2vec2-lm-hpc-pooling.py ${csvfolder}/${csvTrain} ${csvfolder}/${csvValid} ${csvfolder}/${csvTest} ${csvfolder}/${lmModel} ${wavFolder} ${logFolder} ${modelFolder} ${runID} ${conditionID} ${desiredTrainEpochs} ${saveTotalLimit} ${perDeviceTrainBatchSize} ${outputPrefix}
+
+du -h --max-depth=0 ${modelFolder}
+
+rm -rf ${modelFolder}
+
+python3 ${singularityAndCodeFolder}/link-error-and-stats-lm.py ${logFolder}/${outputPrefix}-stats-median.txt ${singularityAndCodeFolder}/${outputSlurm} ${logFolder}/${outputPrefix}-stats.tsv
+
+date
